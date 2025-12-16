@@ -28,9 +28,9 @@ repos:
       # Check JSON syntax
       - id: check-json
 
-      # Trim trailing whitespace
-      - id: trailing-whitespace
-        args: [--markdown-linebreak-ext=md]
+      # # Trim trailing whitespace
+      # - id: trailing-whitespace
+      #   args: [--markdown-linebreak-ext=md]
 
       # Fix end of files
       - id: end-of-file-fixer
