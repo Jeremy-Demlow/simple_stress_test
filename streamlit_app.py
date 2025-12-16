@@ -521,6 +521,15 @@ def page_gen_comparison():
     gen1_history = get_query_history_by_tag(conn, warehouse_name=gen1_wh, hours_back=hours_back)
     gen2_history = get_query_history_by_tag(conn, warehouse_name=gen2_wh, hours_back=hours_back)
 
+    # Warning about fair comparison
+    gen1_count = len(get_query_history_by_tag(conn, warehouse_name=gen1_wh, hours_back=hours_back)) if conn else 0
+    gen2_count = len(get_query_history_by_tag(conn, warehouse_name=gen2_wh, hours_back=hours_back)) if conn else 0
+
+    if gen1_count > 0 and gen2_count > 0:
+        ratio = max(gen1_count, gen2_count) / max(min(gen1_count, gen2_count), 1)
+        if ratio > 2:
+            st.warning(f"⚠️ **Unequal test sizes**: Gen1 has {gen1_count} queries, Gen2 has {gen2_count}. Run equal tests for fair comparison.")
+
     col1, col2 = st.columns(2)
 
     with col1:
@@ -541,7 +550,7 @@ def page_gen_comparison():
             gen1_metrics = {}
 
     with col2:
-        st.subheader("🟢 Gen2 (Snowpark-Optimized)")
+        st.subheader("🟢 Gen2 (Standard - Next Gen)")
         if not gen2_history.empty:
             gen2_metrics = {
                 'total_queries': len(gen2_history),
@@ -576,6 +585,60 @@ def page_gen_comparison():
         st.subheader("📊 Latency Comparison")
         fig = render_comparison_chart(gen1_metrics, gen2_metrics, f"{selected_size} Warehouse: Gen1 vs Gen2")
         st.plotly_chart(fig, use_container_width=True)
+
+        # Summary comparison table
+        st.subheader("📋 Summary")
+        comparison_data = {
+            'Metric': ['Total Queries', 'Avg Latency (ms)', 'Median (ms)', 'P95 (ms)', 'P99 (ms)'],
+            'Gen1': [
+                gen1_metrics['total_queries'],
+                f"{gen1_metrics['avg_elapsed_ms']:.1f}",
+                f"{gen1_metrics['median_elapsed_ms']:.1f}",
+                f"{gen1_metrics['p95_elapsed_ms']:.1f}",
+                f"{gen1_metrics['p99_elapsed_ms']:.1f}",
+            ],
+            'Gen2': [
+                gen2_metrics['total_queries'],
+                f"{gen2_metrics['avg_elapsed_ms']:.1f}",
+                f"{gen2_metrics['median_elapsed_ms']:.1f}",
+                f"{gen2_metrics['p95_elapsed_ms']:.1f}",
+                f"{gen2_metrics['p99_elapsed_ms']:.1f}",
+            ],
+            'Difference': [
+                f"{gen2_metrics['total_queries'] - gen1_metrics['total_queries']:+d}",
+                f"{((gen1_metrics['avg_elapsed_ms'] - gen2_metrics['avg_elapsed_ms']) / gen1_metrics['avg_elapsed_ms'] * 100):+.1f}%",
+                f"{((gen1_metrics['median_elapsed_ms'] - gen2_metrics['median_elapsed_ms']) / gen1_metrics['median_elapsed_ms'] * 100):+.1f}%",
+                f"{((gen1_metrics['p95_elapsed_ms'] - gen2_metrics['p95_elapsed_ms']) / gen1_metrics['p95_elapsed_ms'] * 100):+.1f}%",
+                f"{((gen1_metrics['p99_elapsed_ms'] - gen2_metrics['p99_elapsed_ms']) / gen1_metrics['p99_elapsed_ms'] * 100):+.1f}%",
+            ]
+        }
+        st.dataframe(pd.DataFrame(comparison_data), use_container_width=True, hide_index=True)
+
+    # How to run comparison tests
+    with st.expander("🧪 How to Run a Fair Comparison Test"):
+        st.markdown(f"""
+        **For accurate comparison, run identical tests on both warehouses:**
+
+        ```bash
+        # Step 1: Run Gen1 test
+        cd tests && locust -f locustfile-snowflake.py \\
+            --connection stress_test \\
+            --warehouse {gen1_wh} \\
+            --users 20 --spawn-rate 2 --run-time 2m --headless
+
+        # Step 2: Run Gen2 test (same parameters)
+        locust -f locustfile-snowflake.py \\
+            --connection stress_test \\
+            --warehouse {gen2_wh} \\
+            --users 20 --spawn-rate 2 --run-time 2m --headless
+        ```
+
+        **Tips for fair comparison:**
+        - Use same number of users and duration
+        - Run tests back-to-back to minimize time differences
+        - Consider running 2-3 tests each to account for variance
+        - Check that both warehouses are "warm" (resumed) before testing
+        """)
 
 
 def page_warehouse_details():
