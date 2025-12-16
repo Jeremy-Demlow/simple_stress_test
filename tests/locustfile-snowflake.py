@@ -52,11 +52,15 @@ ID_LISTS: Dict[str, List[str]] = {}
 IDS_LOADED = False
 CONFIG: Optional[Dict] = None
 CURRENT_WAREHOUSE: Optional[str] = None
+TEST_RUN_ID: Optional[str] = None  # Unique identifier for this test run
 
 # Connection pool per warehouse
 CONNECTION_POOLS: Dict[str, Queue] = {}
 MAX_POOL_SIZE = 100
 POOL_INITIALIZED: Dict[str, bool] = {}
+
+# Query tag prefix for identifying stress test queries
+QUERY_TAG_PREFIX = "STRESS_TEST"
 
 
 def load_config(file_path=DEFAULT_CONFIG_PATH) -> Optional[Dict]:
@@ -88,6 +92,20 @@ def get_snowflake_credentials(connection_name: str) -> Dict[str, str]:
     raise FileNotFoundError("Could not find Snow CLI config.toml")
 
 
+def get_query_tag(warehouse: Optional[str] = None) -> str:
+    """
+    Generate a query tag for tracking stress test queries.
+
+    Format: STRESS_TEST|<warehouse>|<test_run_id>
+
+    This tag is used to identify queries in QUERY_HISTORY for analysis.
+    """
+    global TEST_RUN_ID
+    wh = warehouse or CURRENT_WAREHOUSE or "UNKNOWN"
+    run_id = TEST_RUN_ID or "NO_RUN_ID"
+    return f"{QUERY_TAG_PREFIX}|{wh}|{run_id}"
+
+
 def connect_to_snowflake(
     connection_name: str,
     warehouse_override: Optional[str] = None
@@ -110,6 +128,9 @@ def connect_to_snowflake(
 
         warehouse = warehouse_override or creds.get("warehouse")
 
+        # Generate query tag for this connection
+        query_tag = get_query_tag(warehouse)
+
         conn = snowflake.connector.connect(
             account=creds["account"],
             user=creds["user"],
@@ -119,6 +140,9 @@ def connect_to_snowflake(
             role=creds.get("role"),
             warehouse=warehouse,
             converter_class=SnowflakeNoConverterToPython,
+            session_parameters={
+                'QUERY_TAG': query_tag
+            }
         )
 
         # If warehouse override, make sure we're using it
@@ -126,6 +150,7 @@ def connect_to_snowflake(
             cursor = conn.cursor()
             cursor.execute(f"USE WAREHOUSE {warehouse_override}")
 
+        logger.debug(f"Connected with QUERY_TAG: {query_tag}")
         return conn
 
     except Exception as e:
@@ -382,7 +407,12 @@ def on_locust_init_parser(parser):
 @events.init.add_listener
 def on_locust_init(environment, **kwargs):
     """Initialize the test environment."""
-    global CURRENT_WAREHOUSE, CONFIG
+    global CURRENT_WAREHOUSE, CONFIG, TEST_RUN_ID
+
+    # Generate unique test run ID (timestamp-based)
+    from datetime import datetime
+    TEST_RUN_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
+    logger.info(f"=== STRESS TEST RUN ID: {TEST_RUN_ID} ===")
 
     # Set paramstyle globally
     snowflake.connector.paramstyle = 'qmark'
@@ -395,6 +425,7 @@ def on_locust_init(environment, **kwargs):
         return
 
     CONFIG = environment.config
+    environment.test_run_id = TEST_RUN_ID
 
     # Get connection settings
     opts = environment.parsed_options
