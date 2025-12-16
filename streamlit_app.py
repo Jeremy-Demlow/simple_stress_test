@@ -496,6 +496,32 @@ def page_overview():
             st.metric("Warehouses Tested", warehouses_tested)
 
 
+def get_available_run_ids(conn, warehouse_name: str, hours_back: int = 24) -> list:
+    """Get list of available run IDs for a warehouse."""
+    query = f"""
+    SELECT DISTINCT
+        SPLIT_PART(QUERY_TAG, '|', 3) as RUN_ID,
+        COUNT(*) as QUERY_COUNT,
+        MIN(START_TIME) as START_TIME
+    FROM TABLE(INFORMATION_SCHEMA.QUERY_HISTORY(
+        DATEADD('hours', -{hours_back}, CURRENT_TIMESTAMP()),
+        CURRENT_TIMESTAMP(),
+        RESULT_LIMIT => 10000
+    ))
+    WHERE QUERY_TAG LIKE '{QUERY_TAG_PREFIX}|{warehouse_name}|%'
+      AND QUERY_TYPE = 'SELECT'
+    GROUP BY 1
+    ORDER BY START_TIME DESC
+    """
+    try:
+        results = conn.fetch(query)
+        if results:
+            return [(row_to_dict(r)['RUN_ID'], row_to_dict(r)['QUERY_COUNT']) for r in results]
+        return []
+    except Exception:
+        return []
+
+
 def page_gen_comparison():
     """Render Gen1 vs Gen2 comparison page."""
     st.header("⚡ Gen1 vs Gen2 Comparison")
@@ -517,9 +543,34 @@ def page_gen_comparison():
     gen1_wh = f"STRESS_TEST_{selected_size}_GEN1"
     gen2_wh = f"STRESS_TEST_{selected_size}_GEN2"
 
-    # Fetch query history filtered by query tag
-    gen1_history = get_query_history_by_tag(conn, warehouse_name=gen1_wh, hours_back=hours_back)
-    gen2_history = get_query_history_by_tag(conn, warehouse_name=gen2_wh, hours_back=hours_back)
+    # Get available run IDs for each warehouse
+    gen1_runs = get_available_run_ids(conn, gen1_wh, hours_back)
+    gen2_runs = get_available_run_ids(conn, gen2_wh, hours_back)
+
+    # Run ID selectors
+    col_sel1, col_sel2 = st.columns(2)
+
+    with col_sel1:
+        if gen1_runs:
+            gen1_options = ["All runs"] + [f"{run_id} ({count} queries)" for run_id, count in gen1_runs]
+            gen1_selection = st.selectbox("Gen1 Run ID", gen1_options, key="gen1_run")
+            gen1_run_id = None if gen1_selection == "All runs" else gen1_runs[gen1_options.index(gen1_selection) - 1][0]
+        else:
+            st.warning("No Gen1 test runs found")
+            gen1_run_id = None
+
+    with col_sel2:
+        if gen2_runs:
+            gen2_options = ["All runs"] + [f"{run_id} ({count} queries)" for run_id, count in gen2_runs]
+            gen2_selection = st.selectbox("Gen2 Run ID", gen2_options, key="gen2_run")
+            gen2_run_id = None if gen2_selection == "All runs" else gen2_runs[gen2_options.index(gen2_selection) - 1][0]
+        else:
+            st.warning("No Gen2 test runs found")
+            gen2_run_id = None
+
+    # Fetch query history filtered by query tag AND run_id if selected
+    gen1_history = get_query_history_by_tag(conn, warehouse_name=gen1_wh, run_id=gen1_run_id, hours_back=hours_back)
+    gen2_history = get_query_history_by_tag(conn, warehouse_name=gen2_wh, run_id=gen2_run_id, hours_back=hours_back)
 
     # Warning about fair comparison
     gen1_count = len(get_query_history_by_tag(conn, warehouse_name=gen1_wh, hours_back=hours_back)) if conn else 0
@@ -734,59 +785,88 @@ def page_run_test():
     """Render test runner page."""
     st.header("🚀 Run Stress Test")
 
-    st.markdown("""
-    ### Quick Start Commands
+    # Tabs for different test types
+    tab1, tab2, tab3 = st.tabs(["⚡ Parallel Comparison", "🔧 Single Test", "🏭 Warehouse Management"])
 
-    Run these commands in your terminal to execute stress tests:
-    """)
+    with tab1:
+        st.subheader("Run Gen1 vs Gen2 Comparison")
+        st.markdown("**Runs both Gen1 and Gen2 tests simultaneously** for fair comparison.")
 
-    # Test configuration
-    col1, col2 = st.columns(2)
+        col1, col2 = st.columns(2)
+        with col1:
+            size = st.selectbox("Warehouse Size", ["XSMALL", "SMALL", "MEDIUM"], key="parallel_size")
+            users = st.number_input("Concurrent Users", 5, 100, 20, key="parallel_users")
+        with col2:
+            duration = st.selectbox("Duration", ["1m", "2m", "5m", "10m"], index=1, key="parallel_duration")
+            connection = st.text_input("Connection", "stress_test", key="parallel_conn")
 
-    with col1:
-        warehouse = st.selectbox(
-            "Warehouse",
-            ["STRESS_TEST_XSMALL_GEN1", "STRESS_TEST_XSMALL_GEN2",
-             "STRESS_TEST_SMALL_GEN1", "STRESS_TEST_SMALL_GEN2",
-             "STRESS_TEST_MEDIUM_GEN1", "STRESS_TEST_MEDIUM_GEN2"]
-        )
-        users = st.number_input("Concurrent Users", 10, 200, 50)
-
-    with col2:
-        duration = st.selectbox("Duration", ["2m", "5m", "10m", "30m"])
-        connection = st.text_input("Connection Name", "stress_test")
-
-    # Generate command
-    cmd = f"""cd tests && locust -f locustfile-snowflake.py \\
-    --connection {connection} \\
-    --warehouse {warehouse} \\
+        # Generate parallel command
+        parallel_cmd = f"""python run_comparison.py \\
+    --size {size} \\
     --users {users} \\
+    --duration {duration} \\
+    --connection {connection}"""
+
+        st.code(parallel_cmd, language="bash")
+
+        st.info("""
+        **What this does:**
+        - Starts Gen1 and Gen2 tests at the same time
+        - Uses identical parameters for fair comparison
+        - Saves HTML reports to `results/` folder
+        - Query results visible in "Gen1 vs Gen2" page
+        """)
+
+    with tab2:
+        st.subheader("Run Single Warehouse Test")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            warehouse = st.selectbox(
+                "Warehouse",
+                ["STRESS_TEST_XSMALL_GEN1", "STRESS_TEST_XSMALL_GEN2",
+                 "STRESS_TEST_SMALL_GEN1", "STRESS_TEST_SMALL_GEN2",
+                 "STRESS_TEST_MEDIUM_GEN1", "STRESS_TEST_MEDIUM_GEN2"]
+            )
+            single_users = st.number_input("Concurrent Users", 10, 200, 50, key="single_users")
+
+        with col2:
+            single_duration = st.selectbox("Duration", ["2m", "5m", "10m", "30m"], key="single_duration")
+            single_connection = st.text_input("Connection Name", "stress_test", key="single_conn")
+
+        # Generate command
+        cmd = f"""cd tests && locust -f locustfile-snowflake.py \\
+    --connection {single_connection} \\
+    --warehouse {warehouse} \\
+    --users {single_users} \\
     --spawn-rate 2 \\
-    --run-time {duration} \\
+    --run-time {single_duration} \\
     --headless \\
-    --html ../results/{warehouse}_{duration}.html"""
+    --html ../results/{warehouse}_{single_duration}.html"""
 
-    st.code(cmd, language="bash")
+        st.code(cmd, language="bash")
 
-    st.markdown("---")
+    with tab3:
+        st.subheader("Warehouse Management")
 
-    st.markdown("""
-    ### Warehouse Management
+        st.markdown("""
+        ```bash
+        # Setup warehouses (creates 6 test warehouses)
+        python warehouse_manager.py setup stress_test
 
-    ```bash
-    # Setup warehouses
-    python warehouse_manager.py setup stress_test
+        # List warehouses
+        python warehouse_manager.py list stress_test
 
-    # List warehouses
-    python warehouse_manager.py list stress_test
+        # Suspend all (stop credit usage)
+        python warehouse_manager.py suspend stress_test
 
-    # Suspend all (stop credit usage)
-    python warehouse_manager.py suspend stress_test
+        # Resume all
+        python warehouse_manager.py resume stress_test
 
-    # Cleanup (drop all)
-    python warehouse_manager.py cleanup stress_test
-    ```
-    """)
+        # Cleanup (drop all test warehouses)
+        python warehouse_manager.py cleanup stress_test
+        ```
+        """)
 
 
 def page_debug():
