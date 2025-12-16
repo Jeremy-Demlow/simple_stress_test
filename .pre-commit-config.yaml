@@ -1,0 +1,54 @@
+# Pre-commit hooks for security and code quality
+# Install: pip install pre-commit
+# Setup: pre-commit install
+# Run manually: pre-commit run --all-files
+
+repos:
+  # Prevent committing large files
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.5.0
+    hooks:
+      - id: check-added-large-files
+        args: ['--maxkb=1000']
+
+      # Detect AWS credentials
+      - id: detect-aws-credentials
+        args: ['--allow-missing-credentials']
+
+      # Detect private keys
+      - id: detect-private-key
+
+      # Check for merge conflicts
+      - id: check-merge-conflict
+
+      # Check YAML syntax
+      - id: check-yaml
+        exclude: slack_bot/slack_app_manifest.yml
+
+      # Check JSON syntax
+      - id: check-json
+
+      # Trim trailing whitespace
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+
+      # Fix end of files
+      - id: end-of-file-fixer
+
+      # Check for files that would conflict on case-insensitive filesystems
+      - id: check-case-conflict
+
+  # Python-specific checks
+  - repo: https://github.com/psf/black
+    rev: 23.12.1
+    hooks:
+      - id: black
+        language_version: python3.11
+        files: ^(slack_bot|data_setup|agent_tools)/.*\.py$
+
+# Removed:
+# - detect-secrets (requires baseline file)
+# - no-commit-to-branch (too restrictive for demos)
+# - gitleaks (redundant with detect-aws-credentials)
+
+fail_fast: false

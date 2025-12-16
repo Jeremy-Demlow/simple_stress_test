@@ -1,0 +1,344 @@
+locust:
+  # Connection configuration
+  connection_name: stress_test
+
+  # User load configuration
+  load_configuration:
+    min_users: 10
+    max_users: 50
+    cycle_time: 180
+    update_rate: 10
+
+  # User behavior configuration
+  user_behavior:
+    min_wait: 100
+    max_wait: 2000
+
+  # Warehouse configurations for parallel testing
+  warehouses:
+    - name: STRESS_TEST_XSMALL_GEN1
+      size: XSMALL
+      generation: GEN1
+      credits_per_hour: 1
+    - name: STRESS_TEST_XSMALL_GEN2
+      size: XSMALL
+      generation: GEN2
+      credits_per_hour: 1
+    - name: STRESS_TEST_SMALL_GEN1
+      size: SMALL
+      generation: GEN1
+      credits_per_hour: 2
+    - name: STRESS_TEST_SMALL_GEN2
+      size: SMALL
+      generation: GEN2
+      credits_per_hour: 2
+    - name: STRESS_TEST_MEDIUM_GEN1
+      size: MEDIUM
+      generation: GEN1
+      credits_per_hour: 4
+    - name: STRESS_TEST_MEDIUM_GEN2
+      size: MEDIUM
+      generation: GEN2
+      credits_per_hour: 4
+
+  # Query complexity weights
+  query_weights:
+    simple: 5
+    medium: 3
+    complex: 1
+
+  # TPC-H Queries using SFSALESSHARED_SAMPLE_DATA.TPCH_SF1
+  queries:
+    # ============================================================
+    # SIMPLE QUERIES (Weight: 5) - Point lookups
+    # ============================================================
+
+    customer_lookup:
+      complexity: simple
+      sql: >
+        SELECT
+          C_CUSTKEY, C_NAME, C_ADDRESS, C_PHONE, C_ACCTBAL, C_MKTSEGMENT
+        FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.CUSTOMER
+        WHERE C_CUSTKEY = ?
+      params:
+        - random_customer_key
+
+    order_lookup:
+      complexity: simple
+      sql: >
+        SELECT
+          O_ORDERKEY, O_CUSTKEY, O_ORDERSTATUS, O_TOTALPRICE, O_ORDERDATE
+        FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.ORDERS
+        WHERE O_ORDERKEY = ?
+      params:
+        - random_order_key
+
+    part_lookup:
+      complexity: simple
+      sql: >
+        SELECT
+          P_PARTKEY, P_NAME, P_MFGR, P_BRAND, P_TYPE, P_SIZE, P_RETAILPRICE
+        FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.PART
+        WHERE P_PARTKEY = ?
+      params:
+        - random_part_key
+
+    supplier_lookup:
+      complexity: simple
+      sql: >
+        SELECT
+          S_SUPPKEY, S_NAME, S_ADDRESS, S_PHONE, S_ACCTBAL
+        FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.SUPPLIER
+        WHERE S_SUPPKEY = ?
+      params:
+        - random_supplier_key
+
+    customer_orders:
+      complexity: simple
+      sql: >
+        SELECT O_ORDERKEY, O_ORDERSTATUS, O_TOTALPRICE, O_ORDERDATE
+        FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.ORDERS
+        WHERE O_CUSTKEY = ?
+        ORDER BY O_ORDERDATE DESC
+        LIMIT 10
+      params:
+        - random_customer_key
+
+    # ============================================================
+    # MEDIUM QUERIES (Weight: 3) - Aggregations, joins
+    # ============================================================
+
+    pricing_summary:
+      complexity: medium
+      sql: >
+        SELECT
+          L_RETURNFLAG,
+          L_LINESTATUS,
+          SUM(L_QUANTITY) AS SUM_QTY,
+          SUM(L_EXTENDEDPRICE) AS SUM_BASE_PRICE,
+          SUM(L_EXTENDEDPRICE * (1 - L_DISCOUNT)) AS SUM_DISC_PRICE,
+          AVG(L_QUANTITY) AS AVG_QTY,
+          AVG(L_EXTENDEDPRICE) AS AVG_PRICE,
+          COUNT(*) AS COUNT_ORDER
+        FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.LINEITEM
+        WHERE L_SHIPDATE <= DATEADD(day, -90, CURRENT_DATE())
+        GROUP BY L_RETURNFLAG, L_LINESTATUS
+        ORDER BY L_RETURNFLAG, L_LINESTATUS
+
+    forecasting_revenue:
+      complexity: medium
+      sql: >
+        SELECT
+          SUM(L_EXTENDEDPRICE * L_DISCOUNT) AS REVENUE
+        FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.LINEITEM
+        WHERE L_SHIPDATE >= DATE '1994-01-01'
+          AND L_SHIPDATE < DATE '1995-01-01'
+          AND L_DISCOUNT BETWEEN 0.05 AND 0.07
+          AND L_QUANTITY < 24
+
+    customer_order_summary:
+      complexity: medium
+      sql: >
+        SELECT
+          C.C_CUSTKEY,
+          C.C_NAME,
+          C.C_MKTSEGMENT,
+          COUNT(O.O_ORDERKEY) AS ORDER_COUNT,
+          SUM(O.O_TOTALPRICE) AS TOTAL_SPENT,
+          AVG(O.O_TOTALPRICE) AS AVG_ORDER_VALUE
+        FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.CUSTOMER C
+        JOIN SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.ORDERS O
+          ON C.C_CUSTKEY = O.O_CUSTKEY
+        WHERE C.C_CUSTKEY = ?
+        GROUP BY C.C_CUSTKEY, C.C_NAME, C.C_MKTSEGMENT
+      params:
+        - random_customer_key
+
+    order_line_details:
+      complexity: medium
+      sql: >
+        SELECT
+          O.O_ORDERKEY,
+          O.O_ORDERDATE,
+          O.O_TOTALPRICE,
+          L.L_LINENUMBER,
+          L.L_QUANTITY,
+          L.L_EXTENDEDPRICE,
+          P.P_NAME
+        FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.ORDERS O
+        JOIN SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.LINEITEM L
+          ON O.O_ORDERKEY = L.L_ORDERKEY
+        JOIN SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.PART P
+          ON L.L_PARTKEY = P.P_PARTKEY
+        WHERE O.O_ORDERKEY = ?
+        ORDER BY L.L_LINENUMBER
+      params:
+        - random_order_key
+
+    supplier_parts:
+      complexity: medium
+      sql: >
+        SELECT
+          S.S_NAME,
+          P.P_NAME,
+          P.P_BRAND,
+          PS.PS_AVAILQTY,
+          PS.PS_SUPPLYCOST,
+          P.P_RETAILPRICE
+        FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.SUPPLIER S
+        JOIN SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.PARTSUPP PS
+          ON S.S_SUPPKEY = PS.PS_SUPPKEY
+        JOIN SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.PART P
+          ON PS.PS_PARTKEY = P.P_PARTKEY
+        WHERE S.S_SUPPKEY = ?
+        ORDER BY PS.PS_SUPPLYCOST
+        LIMIT 50
+      params:
+        - random_supplier_key
+
+    # ============================================================
+    # COMPLEX QUERIES (Weight: 1) - CTEs, multi-joins
+    # ============================================================
+
+    shipping_priority:
+      complexity: complex
+      sql: >
+        SELECT
+          L.L_ORDERKEY,
+          SUM(L.L_EXTENDEDPRICE * (1 - L.L_DISCOUNT)) AS REVENUE,
+          O.O_ORDERDATE,
+          O.O_SHIPPRIORITY
+        FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.CUSTOMER C
+        JOIN SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.ORDERS O
+          ON C.C_CUSTKEY = O.O_CUSTKEY
+        JOIN SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.LINEITEM L
+          ON L.L_ORDERKEY = O.O_ORDERKEY
+        WHERE C.C_MKTSEGMENT = ?
+          AND O.O_ORDERDATE < DATE '1995-03-15'
+          AND L.L_SHIPDATE > DATE '1995-03-15'
+        GROUP BY L.L_ORDERKEY, O.O_ORDERDATE, O.O_SHIPPRIORITY
+        ORDER BY REVENUE DESC, O.O_ORDERDATE
+        LIMIT 100
+      params:
+        - random_market_segment
+
+    local_supplier_volume:
+      complexity: complex
+      sql: >
+        SELECT
+          N.N_NAME,
+          SUM(L.L_EXTENDEDPRICE * (1 - L.L_DISCOUNT)) AS REVENUE
+        FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.CUSTOMER C
+        JOIN SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.ORDERS O
+          ON C.C_CUSTKEY = O.O_CUSTKEY
+        JOIN SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.LINEITEM L
+          ON L.L_ORDERKEY = O.O_ORDERKEY
+        JOIN SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.SUPPLIER S
+          ON L.L_SUPPKEY = S.S_SUPPKEY
+        JOIN SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.NATION N
+          ON S.S_NATIONKEY = N.N_NATIONKEY
+        JOIN SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.REGION R
+          ON N.N_REGIONKEY = R.R_REGIONKEY
+        WHERE R.R_NAME = ?
+          AND C.C_NATIONKEY = S.S_NATIONKEY
+          AND O.O_ORDERDATE >= DATE '1994-01-01'
+          AND O.O_ORDERDATE < DATE '1995-01-01'
+        GROUP BY N.N_NAME
+        ORDER BY REVENUE DESC
+      params:
+        - random_region
+
+    customer_lifetime_value:
+      complexity: complex
+      sql: >
+        WITH customer_orders AS (
+          SELECT
+            C.C_CUSTKEY,
+            C.C_NAME,
+            C.C_MKTSEGMENT,
+            N.N_NAME AS NATION,
+            COUNT(DISTINCT O.O_ORDERKEY) AS TOTAL_ORDERS,
+            SUM(O.O_TOTALPRICE) AS TOTAL_SPENT,
+            MIN(O.O_ORDERDATE) AS FIRST_ORDER_DATE,
+            MAX(O.O_ORDERDATE) AS LAST_ORDER_DATE
+          FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.CUSTOMER C
+          JOIN SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.NATION N
+            ON C.C_NATIONKEY = N.N_NATIONKEY
+          LEFT JOIN SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.ORDERS O
+            ON C.C_CUSTKEY = O.O_CUSTKEY
+          WHERE C.C_CUSTKEY = ?
+          GROUP BY C.C_CUSTKEY, C.C_NAME, C.C_MKTSEGMENT, N.N_NAME
+        )
+        SELECT
+          *,
+          DATEDIFF('day', FIRST_ORDER_DATE, LAST_ORDER_DATE) AS CUSTOMER_TENURE_DAYS,
+          TOTAL_SPENT / NULLIF(TOTAL_ORDERS, 0) AS AVG_ORDER_VALUE
+        FROM customer_orders
+      params:
+        - random_customer_key
+
+    supplier_ranking:
+      complexity: complex
+      sql: >
+        WITH supplier_metrics AS (
+          SELECT
+            S.S_SUPPKEY,
+            S.S_NAME,
+            N.N_NAME AS NATION,
+            COUNT(DISTINCT L.L_ORDERKEY) AS ORDERS_FULFILLED,
+            SUM(L.L_QUANTITY) AS TOTAL_QTY_SUPPLIED,
+            SUM(L.L_EXTENDEDPRICE) AS TOTAL_REVENUE
+          FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.SUPPLIER S
+          JOIN SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.NATION N
+            ON S.S_NATIONKEY = N.N_NATIONKEY
+          JOIN SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.LINEITEM L
+            ON S.S_SUPPKEY = L.L_SUPPKEY
+          JOIN SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.ORDERS O
+            ON L.L_ORDERKEY = O.O_ORDERKEY
+          WHERE O.O_ORDERDATE >= DATEADD(year, -1, CURRENT_DATE())
+          GROUP BY S.S_SUPPKEY, S.S_NAME, N.N_NAME
+        )
+        SELECT
+          *,
+          RANK() OVER (ORDER BY TOTAL_REVENUE DESC) AS REVENUE_RANK,
+          PERCENT_RANK() OVER (ORDER BY TOTAL_REVENUE) AS REVENUE_PERCENTILE
+        FROM supplier_metrics
+        WHERE NATION = ?
+        ORDER BY TOTAL_REVENUE DESC
+        LIMIT 50
+      params:
+        - random_nation
+
+  # ID lists for parameterized queries
+  id_lists:
+    customer_key_query: >
+      SELECT C_CUSTKEY
+      FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.CUSTOMER
+      SAMPLE (1000 ROWS)
+
+    order_key_query: >
+      SELECT O_ORDERKEY
+      FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.ORDERS
+      SAMPLE (1000 ROWS)
+
+    part_key_query: >
+      SELECT P_PARTKEY
+      FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.PART
+      SAMPLE (1000 ROWS)
+
+    supplier_key_query: >
+      SELECT S_SUPPKEY
+      FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.SUPPLIER
+      SAMPLE (500 ROWS)
+
+    market_segment_query: >
+      SELECT DISTINCT C_MKTSEGMENT
+      FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.CUSTOMER
+
+    region_query: >
+      SELECT R_NAME
+      FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.REGION
+
+    nation_query: >
+      SELECT N_NAME
+      FROM SFSALESSHARED_SAMPLE_DATA.TPCH_SF1.NATION

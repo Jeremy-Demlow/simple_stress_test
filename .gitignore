@@ -1,0 +1,102 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+streamlit_snowflake/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Snowflake
+.snowflake/
+
+# Streamlit build output
+**/output/
+**/.streamlit/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets and credentials
+*.pem
+*.key
+secrets/
+credentials/
+
+# Local config (keep template in repo)
+# config.toml is needed for GitHub Actions
+
+# dbt artifacts
+dbt_ski_resort/target/
+dbt_ski_resort/logs/
+dbt_ski_resort/dbt_packages/
+
+# Generated data files (large)
+ski_resort_data/*.csv
+ski_resort_data/*.csv.gz
+*.parquet
+
+# TruLens/SQLite databases
+*.sqlite
+*.db
+
+# ML artifacts
+*.pkl
+*.joblib
+forecast_output.png
+
+# Snowflake staging files
+*.gz.parquet
+
+# Jupyter
+*.ipynb_checkpoints/
+.ipynb_checkpoints/
+
+# Generated SQL (keep for audit but don't track changes)
+snowflake_agents/generated/
+
+# Local test outputs
+test_output/
+output/
+
+# Cursor IDE
+.cursor/
+
+# Locust test reports
+*.html
+results/
+
+# Pickle cache files
+*.pickle
