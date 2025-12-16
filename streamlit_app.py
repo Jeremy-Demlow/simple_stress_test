@@ -236,16 +236,18 @@ def get_test_warehouses(conn) -> pd.DataFrame:
     try:
         results = conn.fetch(query)
         if results:
-            # SHOW WAREHOUSES returns rows with specific column indices:
-            # 0: created_on, 1: name, 2: state, 3: type, 4: size, 5: min_cluster_count, etc.
             rows = []
             for row in results:
-                # Access by index since SHOW commands have fixed positions
+                d = row.as_dict()
+                # resource_constraint tells us Gen1 vs Gen2
+                resource = d.get('resource_constraint', 'STANDARD')
+                gen = 'Gen2' if 'GEN_2' in str(resource) else 'Gen1'
                 rows.append({
-                    'NAME': row[1] if len(row) > 1 else 'Unknown',
-                    'STATE': row[2] if len(row) > 2 else 'Unknown',
-                    'TYPE': row[3] if len(row) > 3 else 'STANDARD',
-                    'SIZE': row[4] if len(row) > 4 else 'Unknown',
+                    'NAME': d.get('name', 'Unknown'),
+                    'STATE': d.get('state', 'Unknown'),
+                    'SIZE': d.get('size', 'Unknown'),
+                    'GENERATION': gen,
+                    'AUTO_SUSPEND': d.get('auto_suspend', 0),
                 })
             return pd.DataFrame(rows)
         return pd.DataFrame()
@@ -829,7 +831,7 @@ def main():
     st.sidebar.markdown("---")
     page = st.sidebar.radio(
         "Navigation",
-        ["Overview", "Gen1 vs Gen2", "Warehouse Details", "Run Test"],
+        ["Overview", "Gen1 vs Gen2", "Warehouse Details", "Run Test", "🔧 Debug"],
         label_visibility="collapsed"
     )
 
@@ -842,6 +844,8 @@ def main():
         page_warehouse_details()
     elif page == "Run Test":
         page_run_test()
+    elif page == "🔧 Debug":
+        page_debug()
 
     # Footer
     st.sidebar.markdown("---")
