@@ -15,8 +15,14 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import subprocess
+from pathlib import Path
+from datetime import datetime
 
 from snowflake_connection import SnowflakeConnection
+
+# Cache TTL (time to live) in seconds
+CACHE_TTL = 60  # 1 minute
 
 # Page configuration
 st.set_page_config(
@@ -135,9 +141,11 @@ def row_to_dict(row) -> dict:
             return {str(i): v for i, v in enumerate(row)}
 
 
-def get_recent_test_runs(conn, hours_back: int = 24) -> pd.DataFrame:
+@st.cache_data(ttl=CACHE_TTL)
+def get_recent_test_runs(_conn, hours_back: int = 24) -> pd.DataFrame:
     """
     Get list of recent stress test runs by parsing QUERY_TAG values.
+    Cached for 60 seconds.
 
     Query tags have format: STRESS_TEST|<warehouse>|<run_id>
     """
@@ -161,7 +169,7 @@ def get_recent_test_runs(conn, hours_back: int = 24) -> pd.DataFrame:
     ORDER BY START_TIME DESC
     """
     try:
-        results = conn.fetch(query)
+        results = _conn.fetch(query)
         if results:
             return pd.DataFrame([row_to_dict(row) for row in results])
         return pd.DataFrame()
@@ -170,8 +178,9 @@ def get_recent_test_runs(conn, hours_back: int = 24) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=CACHE_TTL)
 def get_query_history_by_tag(
-    conn,
+    _conn,
     warehouse_name: str = None,
     run_id: str = None,
     hours_back: int = 2
@@ -221,7 +230,7 @@ def get_query_history_by_tag(
     ORDER BY START_TIME DESC
     """
     try:
-        results = conn.fetch(query)
+        results = _conn.fetch(query)
         if results:
             return pd.DataFrame([row_to_dict(row) for row in results])
         return pd.DataFrame()
@@ -230,11 +239,12 @@ def get_query_history_by_tag(
         return pd.DataFrame()
 
 
-def get_test_warehouses(conn) -> pd.DataFrame:
-    """Get list of stress test warehouses using SHOW WAREHOUSES."""
+@st.cache_data(ttl=CACHE_TTL)
+def get_test_warehouses(_conn) -> pd.DataFrame:
+    """Get list of stress test warehouses using SHOW WAREHOUSES. Cached for 60s."""
     query = f"SHOW WAREHOUSES LIKE '{WAREHOUSE_PREFIX}%'"
     try:
-        results = conn.fetch(query)
+        results = _conn.fetch(query)
         if results:
             rows = []
             for row in results:
@@ -510,8 +520,9 @@ def page_overview():
             st.metric("Warehouses Tested", warehouses_tested)
 
 
-def get_available_run_ids(conn, warehouse_name: str, hours_back: int = 24) -> list:
-    """Get list of available run IDs for a warehouse."""
+@st.cache_data(ttl=CACHE_TTL)
+def get_available_run_ids(_conn, warehouse_name: str, hours_back: int = 24) -> list:
+    """Get list of available run IDs for a warehouse. Cached for 60s."""
     query = f"""
     SELECT DISTINCT
         SPLIT_PART(QUERY_TAG, '|', 3) as RUN_ID,
@@ -528,7 +539,7 @@ def get_available_run_ids(conn, warehouse_name: str, hours_back: int = 24) -> li
     ORDER BY START_TIME DESC
     """
     try:
-        results = conn.fetch(query)
+        results = _conn.fetch(query)
         if results:
             return [(row_to_dict(r)['RUN_ID'], row_to_dict(r)['QUERY_COUNT']) for r in results]
         return []
@@ -797,92 +808,198 @@ def page_warehouse_details():
         )
 
 
+def run_test_with_output(cmd: list, placeholder) -> tuple:
+    """Run a test command and stream output to a Streamlit placeholder."""
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1
+    )
+
+    output_lines = []
+    for line in iter(process.stdout.readline, ''):
+        output_lines.append(line)
+        # Keep last 50 lines for display
+        display_lines = output_lines[-50:]
+        placeholder.code(''.join(display_lines), language="text")
+
+    process.wait()
+    return process.returncode, ''.join(output_lines)
+
+
 def page_run_test():
     """Render test runner page."""
     st.header("🚀 Run Stress Test")
 
+    # Initialize session state for test running
+    if 'test_running' not in st.session_state:
+        st.session_state.test_running = False
+    if 'test_output' not in st.session_state:
+        st.session_state.test_output = ""
+    if 'last_report' not in st.session_state:
+        st.session_state.last_report = None
+
     # Tabs for different test types
-    tab1, tab2, tab3 = st.tabs(["⚡ Parallel Comparison", "🔧 Single Test", "🏭 Warehouse Management"])
+    tab1, tab2, tab3, tab4 = st.tabs(["⚡ Run Test", "📋 Command Reference", "🏭 Warehouse Management", "📊 View Reports"])
 
     with tab1:
-        st.subheader("Run Gen1 vs Gen2 Comparison")
-        st.markdown("**Runs both Gen1 and Gen2 tests simultaneously** for fair comparison.")
+        st.subheader("🧪 Execute Stress Test")
 
         col1, col2 = st.columns(2)
         with col1:
-            size = st.selectbox("Warehouse Size", ["XSMALL", "SMALL", "MEDIUM"], key="parallel_size")
-            users = st.number_input("Concurrent Users", 5, 100, 20, key="parallel_users")
+            test_type = st.radio("Test Type", ["Parallel (Gen1 + Gen2)", "Single Warehouse"], key="test_type")
+            size = st.selectbox("Warehouse Size", ["XSMALL", "SMALL", "MEDIUM"], key="run_size")
+            users = st.number_input("Concurrent Users", 5, 200, 20, key="run_users")
+
         with col2:
-            duration = st.selectbox("Duration", ["1m", "2m", "5m", "10m"], index=1, key="parallel_duration")
-            connection = st.text_input("Connection", "stress_test", key="parallel_conn")
+            duration = st.selectbox("Duration", ["30s", "1m", "2m", "5m", "10m"], index=2, key="run_duration")
+            connection = st.text_input("Connection", "stress_test", key="run_conn")
+            if test_type == "Single Warehouse":
+                gen_type = st.selectbox("Generation", ["GEN1", "GEN2"], key="run_gen")
 
-        # Generate parallel command
-        parallel_cmd = f"""python run_comparison.py \\
-    --size {size} \\
-    --users {users} \\
-    --duration {duration} \\
-    --connection {connection}"""
+        # Build command
+        if test_type == "Parallel (Gen1 + Gen2)":
+            cmd = [
+                "python", "run_comparison.py",
+                "--size", size,
+                "--users", str(users),
+                "--duration", duration,
+                "--connection", connection
+            ]
+            cmd_str = f"python run_comparison.py --size {size} --users {users} --duration {duration} --connection {connection}"
+        else:
+            warehouse = f"STRESS_TEST_{size}_{gen_type}"
+            cmd = [
+                "locust", "-f", "tests/locustfile-snowflake.py",
+                "--connection", connection,
+                "--warehouse", warehouse,
+                "--users", str(users),
+                "--spawn-rate", "2",
+                "--run-time", duration,
+                "--headless"
+            ]
+            cmd_str = f"locust -f tests/locustfile-snowflake.py --connection {connection} --warehouse {warehouse} --users {users} --spawn-rate 2 --run-time {duration} --headless"
 
-        st.code(parallel_cmd, language="bash")
+        st.code(cmd_str, language="bash")
 
-        st.info("""
-        **What this does:**
-        - Starts Gen1 and Gen2 tests at the same time
-        - Uses identical parameters for fair comparison
-        - Saves HTML reports to `results/` folder
-        - Query results visible in "Gen1 vs Gen2" page
-        """)
+        col_btn1, col_btn2 = st.columns([1, 3])
+        with col_btn1:
+            run_button = st.button("▶️ Run Test", type="primary", disabled=st.session_state.test_running)
+        with col_btn2:
+            if st.session_state.test_running:
+                st.warning("⏳ Test is running...")
+
+        # Output area
+        output_placeholder = st.empty()
+
+        if run_button and not st.session_state.test_running:
+            st.session_state.test_running = True
+            st.session_state.test_output = ""
+
+            with output_placeholder.container():
+                st.info("🚀 Starting test...")
+                log_area = st.empty()
+
+                try:
+                    # Run the command
+                    process = subprocess.Popen(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
+                        cwd=str(Path(__file__).parent)
+                    )
+
+                    output_lines = []
+                    for line in iter(process.stdout.readline, ''):
+                        if line:
+                            output_lines.append(line)
+                            # Show last 30 lines
+                            display = ''.join(output_lines[-30:])
+                            log_area.code(display, language="text")
+
+                    process.wait()
+                    st.session_state.test_output = ''.join(output_lines)
+
+                    if process.returncode == 0:
+                        st.success("✅ Test completed successfully!")
+                        # Clear cache to refresh data
+                        st.cache_data.clear()
+                    else:
+                        st.error(f"❌ Test failed with exit code {process.returncode}")
+
+                except Exception as e:
+                    st.error(f"❌ Error running test: {e}")
+
+                finally:
+                    st.session_state.test_running = False
+                    st.rerun()
+
+        # Show previous output if exists
+        if st.session_state.test_output and not st.session_state.test_running:
+            with st.expander("📜 Last Test Output", expanded=False):
+                st.code(st.session_state.test_output[-5000:], language="text")
 
     with tab2:
-        st.subheader("Run Single Warehouse Test")
+        st.subheader("📋 Command Reference")
+        st.code("""# Parallel comparison test
+python run_comparison.py --size XSMALL --users 20 --duration 2m
 
-        col1, col2 = st.columns(2)
-        with col1:
-            warehouse = st.selectbox(
-                "Warehouse",
-                ["STRESS_TEST_XSMALL_GEN1", "STRESS_TEST_XSMALL_GEN2",
-                 "STRESS_TEST_SMALL_GEN1", "STRESS_TEST_SMALL_GEN2",
-                 "STRESS_TEST_MEDIUM_GEN1", "STRESS_TEST_MEDIUM_GEN2"]
-            )
-            single_users = st.number_input("Concurrent Users", 10, 200, 50, key="single_users")
+# Single warehouse test
+cd tests && locust -f locustfile-snowflake.py \\
+    --connection stress_test \\
+    --warehouse STRESS_TEST_XSMALL_GEN1 \\
+    --users 20 --spawn-rate 2 --run-time 2m --headless
 
-        with col2:
-            single_duration = st.selectbox("Duration", ["2m", "5m", "10m", "30m"], key="single_duration")
-            single_connection = st.text_input("Connection Name", "stress_test", key="single_conn")
-
-        # Generate command
-        cmd = f"""cd tests && locust -f locustfile-snowflake.py \\
-    --connection {single_connection} \\
-    --warehouse {warehouse} \\
-    --users {single_users} \\
-    --spawn-rate 2 \\
-    --run-time {single_duration} \\
-    --headless \\
-    --html ../results/{warehouse}_{single_duration}.html"""
-
-        st.code(cmd, language="bash")
+# With Locust web UI
+cd tests && locust -f locustfile-snowflake.py --connection stress_test
+# Open http://localhost:8089""", language="bash")
 
     with tab3:
-        st.subheader("Warehouse Management")
+        st.subheader("🏭 Warehouse Management")
+        st.code("""# Setup (create warehouses)
+python warehouse_manager.py setup stress_test
 
-        st.markdown("""
-        ```bash
-        # Setup warehouses (creates 6 test warehouses)
-        python warehouse_manager.py setup stress_test
+# Suspend all (stop credit usage)
+python warehouse_manager.py suspend stress_test
 
-        # List warehouses
-        python warehouse_manager.py list stress_test
+# Resume all
+python warehouse_manager.py resume stress_test
 
-        # Suspend all (stop credit usage)
-        python warehouse_manager.py suspend stress_test
+# Cleanup (drop all)
+python warehouse_manager.py cleanup stress_test""", language="bash")
 
-        # Resume all
-        python warehouse_manager.py resume stress_test
+        if st.session_state.connected:
+            st.markdown("**Current Status:**")
+            wh_df = get_test_warehouses(st.session_state.connection)
+            if not wh_df.empty:
+                st.dataframe(wh_df, use_container_width=True, hide_index=True)
 
-        # Cleanup (drop all test warehouses)
-        python warehouse_manager.py cleanup stress_test
-        ```
-        """)
+    with tab4:
+        st.subheader("📊 View HTML Reports")
+        results_dir = Path(__file__).parent / "results"
+
+        if results_dir.exists():
+            html_files = sorted(results_dir.glob("*.html"), key=lambda x: x.stat().st_mtime, reverse=True)
+            if html_files:
+                report_names = [f.name for f in html_files[:15]]
+                selected = st.selectbox("Select Report", report_names)
+
+                if selected:
+                    report_path = results_dir / selected
+                    mod_time = datetime.fromtimestamp(report_path.stat().st_mtime)
+                    st.caption(f"Last modified: {mod_time.strftime('%Y-%m-%d %H:%M:%S')}")
+
+                    with open(report_path, 'r') as f:
+                        html = f.read()
+                    st.components.v1.html(html, height=700, scrolling=True)
+            else:
+                st.info("No HTML reports found. Run a test first!")
+        else:
+            st.info("Results directory not found.")
 
 
 def page_debug():
