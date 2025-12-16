@@ -1,280 +1,196 @@
 # Snowflake Stress Testing Framework
 
-A comprehensive load testing framework for Snowflake warehouses using Locust, with support for Gen1 vs Gen2 comparison, multiple warehouse sizes, and TPC-H benchmark queries.
+A comprehensive framework for stress testing Snowflake warehouses with Gen1 vs Gen2 comparison capabilities.
 
 ## Features
 
-- **TPC-H Benchmark Queries**: Simple, medium, and complex query tiers with configurable weighting
-- **Parallel Warehouse Testing**: Test multiple warehouse configurations simultaneously
-- **Gen1 vs Gen2 Comparison**: Direct performance comparison between warehouse generations
-- **Size Scaling Analysis**: X-Small, Small, and Medium warehouse comparison
-- **Connection Pooling**: Efficient connection management for high throughput
-- **Results Aggregation**: Automated metrics collection from QUERY_HISTORY
-- **Snowflake CLI Integration**: Uses `~/.snowflake/config.toml` for credentials
+- **TPC-H Benchmark Queries** - Industry-standard queries for database performance testing
+- **Gen1 vs Gen2 Comparison** - Compare standard vs next-gen warehouse performance
+- **Query Tagging** - All test queries are tagged for easy tracking and analysis
+- **Parallel Test Runner** - Run tests on multiple warehouses simultaneously
+- **Interactive Dashboard** - Streamlit app for visualizing and comparing results
+- **Warehouse Management** - Scripts to setup, suspend, and cleanup test warehouses
 
 ## Quick Start
 
-### 1. Setup Snowflake Connection
-
-Create a `stress_testing` connection in `~/.snowflake/config.toml`:
-
-```toml
-[connections.stress_testing]
-account = "your_account"
-user = "your_user"
-password = "your_password"
-role = "ACCOUNTADMIN"
-warehouse = "COMPUTE_WH"
-database = "SNOWFLAKE_SAMPLE_DATA"
-schema = "TPCH_SF1"
-```
-
-### 2. Create Test Warehouses
-
-Option A - Using Python:
-```bash
-python warehouse_manager.py setup stress_testing
-```
-
-Option B - Using SQL:
-```bash
-snow sql -f sql/setup_warehouses.sql -c stress_testing
-```
-
-### 3. Run a Basic Test
+### 1. Setup Warehouses
 
 ```bash
-cd tests
-locust -f locustfile-snowflake.py \
-    --connection stress_testing \
-    --warehouse STRESS_TEST_XSMALL_GEN1 \
-    --users 50 \
-    --spawn-rate 2 \
-    --run-time 10m \
-    --html report.html
+# Create 6 test warehouses (XS/S/M × Gen1/Gen2)
+python warehouse_manager.py setup stress_test
 ```
 
-### 4. Run Parallel Tests (Gen1 vs Gen2)
+### 2. Run Parallel Comparison Test
 
 ```bash
-python parallel_test_runner.py \
-    --connection stress_testing \
-    --users 50 \
-    --duration 10m
+# Quick test (30 seconds)
+python run_comparison.py --size XSMALL --users 10 --duration 30s
+
+# Standard test (2 minutes)
+python run_comparison.py --size XSMALL --users 20 --duration 2m
+
+# Heavy load test (5 minutes, larger warehouse)
+python run_comparison.py --size SMALL --users 50 --duration 5m
 ```
 
-### 5. Analyze Results
+### 3. View Results in Dashboard
 
 ```bash
-python results_aggregator.py --connection stress_testing --hours 2
+streamlit run streamlit_app.py
 ```
+
+Open http://localhost:8501 in your browser.
+
+## Dashboard Pages
+
+| Page | Description |
+|------|-------------|
+| **Overview** | Shows test warehouses and recent test runs |
+| **Gen1 vs Gen2** | Compare performance between warehouse generations |
+| **Warehouse Details** | Deep dive into specific warehouse metrics |
+| **Run Test** | Commands to run tests and manage warehouses |
+| **Debug** | Test queries and diagnose connection issues |
+
+## Warehouse Types
+
+This framework tests **Gen2 Standard** warehouses vs **Gen1 Standard** warehouses:
+
+| Type | RESOURCE_CONSTRAINT | Description |
+|------|---------------------|-------------|
+| Gen1 | `STANDARD_GEN_1` | Original Snowflake warehouses |
+| Gen2 | `STANDARD_GEN_2` | Next-generation with improved compute |
+
+**Note:** These are different from Snowpark-optimized warehouses (`MEMORY_*X`), which are designed for ML/UDF workloads.
+
+## Query Tagging
+
+All stress test queries are automatically tagged with:
+
+```
+STRESS_TEST|<warehouse>|<run_id>
+```
+
+Example: `STRESS_TEST|STRESS_TEST_XSMALL_GEN1|20251216_140234`
+
+This allows filtering query history in:
+- Snowflake's QUERY_HISTORY
+- The Streamlit dashboard
+- Custom analysis queries
 
 ## Project Structure
 
 ```
 simple_stress_test/
-├── warehouse_manager.py      # Warehouse lifecycle management (Snowpark)
-├── parallel_test_runner.py   # Orchestrates parallel warehouse tests
-├── results_aggregator.py     # Collects and compares test results
-├── snowflake_connection.py   # Snowpark connection utilities
-├── requirements.txt          # Python dependencies
-│
+├── streamlit_app.py       # Dashboard application
+├── run_comparison.py      # Parallel test runner
+├── warehouse_manager.py   # Warehouse lifecycle management
+├── snowflake_connection.py # Snowflake connection utilities
 ├── tests/
-│   ├── locustfile-snowflake.py   # Main Locust test file
-│   ├── locust_config.yaml        # Query and test configuration
-│   └── locust.conf               # Locust default settings
-│
+│   ├── locustfile-snowflake.py  # Locust test definitions
+│   └── locust_config.yaml       # Query configurations
 ├── sql/
-│   ├── setup_warehouses.sql      # Create test warehouses
-│   ├── cleanup_warehouses.sql    # Drop test warehouses
-│   └── suspend_warehouses.sql    # Suspend all warehouses
-│
-└── results/                  # Test results and reports
+│   ├── setup_warehouses.sql     # Warehouse creation SQL
+│   ├── cleanup_warehouses.sql   # Warehouse deletion SQL
+│   └── suspend_warehouses.sql   # Warehouse suspension SQL
+└── results/               # Test reports (HTML)
+```
+
+## Running Individual Tests
+
+### Single Warehouse Test
+
+```bash
+cd tests && locust -f locustfile-snowflake.py \
+    --connection stress_test \
+    --warehouse STRESS_TEST_XSMALL_GEN1 \
+    --users 20 \
+    --spawn-rate 2 \
+    --run-time 2m \
+    --headless \
+    --html ../results/test_report.html
+```
+
+### With Web UI
+
+```bash
+cd tests && locust -f locustfile-snowflake.py \
+    --connection stress_test \
+    --warehouse STRESS_TEST_XSMALL_GEN1
+```
+
+Open http://localhost:8089 to control the test.
+
+## Warehouse Management
+
+```bash
+# Setup (create warehouses)
+python warehouse_manager.py setup stress_test
+
+# List warehouses
+python warehouse_manager.py list stress_test
+
+# Suspend all (stop credit usage)
+python warehouse_manager.py suspend stress_test
+
+# Resume all
+python warehouse_manager.py resume stress_test
+
+# Cleanup (drop all test warehouses)
+python warehouse_manager.py cleanup stress_test
 ```
 
 ## Configuration
 
-### locust_config.yaml
+### Snow CLI Connection
 
-```yaml
-locust:
-  connection_name: stress_testing
+Add to `~/.snowflake/config.toml`:
 
-  load_configuration:
-    min_users: 10
-    max_users: 50
-
-  user_behavior:
-    min_wait: 100   # ms between queries
-    max_wait: 2000
-
-  query_weights:
-    simple: 5    # Point lookups (most frequent)
-    medium: 3    # Joins, aggregations
-    complex: 1   # Multi-join CTEs (least frequent)
-
-  queries:
-    customer_lookup:
-      complexity: simple
-      sql: SELECT * FROM CUSTOMER WHERE C_CUSTKEY = ?
-      params: [random_customer_key]
-    # ... more queries
+```toml
+[connections.stress_test]
+account = "your_account"
+user = "your_user"
+password = "your_password"
+warehouse = "COMPUTE_WH"
+database = "your_database"
+schema = "your_schema"
+role = "ACCOUNTADMIN"
 ```
 
-### Command Line Options
+### Test Configuration
+
+Edit `tests/locust_config.yaml` to customize:
+- Query weights (simple/medium/complex)
+- User behavior (wait times)
+- ID list queries
+
+## Requirements
 
 ```bash
-locust -f locustfile-snowflake.py [OPTIONS]
-
-Options:
-  --connection NAME       Snowflake connection name (default: stress_testing)
-  --warehouse NAME        Target warehouse to test
-  --users N              Number of concurrent users
-  --spawn-rate N         Users spawned per second
-  --run-time DURATION    Test duration (e.g., "10m", "1h")
-  --min-wait MS          Min wait between queries
-  --max-wait MS          Max wait between queries
-  --query-complexity     Filter: simple, medium, complex, or mixed
-  --force-id-reload      Reload IDs from Snowflake (ignore cache)
-  --print-ids            Print sample IDs before starting
-  --html FILE            Generate HTML report
+pip install locust snowflake-connector-python snowflake-snowpark-python streamlit plotly pyyaml tomlkit
 ```
 
-## Warehouse Configurations
+## Sample Results
 
-The framework creates 6 test warehouses:
+After running a comparison test:
 
-| Warehouse Name | Size | Generation | Credits/Hour |
-|----------------|------|------------|--------------|
-| STRESS_TEST_XSMALL_GEN1 | X-Small | Gen1 | 1 |
-| STRESS_TEST_XSMALL_GEN2 | X-Small | Gen2 | 1 |
-| STRESS_TEST_SMALL_GEN1 | Small | Gen1 | 2 |
-| STRESS_TEST_SMALL_GEN2 | Small | Gen2 | 2 |
-| STRESS_TEST_MEDIUM_GEN1 | Medium | Gen1 | 4 |
-| STRESS_TEST_MEDIUM_GEN2 | Medium | Gen2 | 4 |
+```
+============================================================
+🔬 PARALLEL STRESS TEST COMPARISON
+============================================================
+Size:       XSMALL
+Users:      20
+Duration:   2m
 
-## TPC-H Query Types
+✅ Gen1 completed in 125.3s - 523 queries
+✅ Gen2 completed in 124.8s - 548 queries
+============================================================
 
-### Simple Queries (Weight: 5)
-- Point lookups by primary key
-- Single table scans with filters
-- Example: `customer_lookup`, `order_lookup`
+Gen1: Avg=0.21s, Median=0.14s, P95=0.49s
+Gen2: Avg=0.18s, Median=0.13s, P95=0.47s
 
-### Medium Queries (Weight: 3)
-- 2-3 table joins
-- Aggregations with GROUP BY
-- Window functions
-- Example: `pricing_summary`, `customer_order_summary`
-
-### Complex Queries (Weight: 1)
-- 4+ table joins
-- CTEs with analytical functions
-- Nested subqueries
-- Example: `market_share`, `customer_lifetime_value`
-
-## Usage Examples
-
-### Test Single Warehouse
-```bash
-locust -f tests/locustfile-snowflake.py \
-    --connection stress_testing \
-    --warehouse STRESS_TEST_SMALL_GEN2 \
-    --users 100 \
-    --run-time 5m
+✅ Gen2 is 17.3% FASTER on average
 ```
 
-### Compare Gen1 vs Gen2
-```bash
-# Run parallel tests on all warehouses
-python parallel_test_runner.py \
-    --connection stress_testing \
-    --users 50 \
-    --duration 10m
+## License
 
-# View comparison
-python results_aggregator.py --connection stress_testing
-```
-
-### Test Only Simple Queries
-```bash
-locust -f tests/locustfile-snowflake.py \
-    --connection stress_testing \
-    --warehouse STRESS_TEST_MEDIUM_GEN1 \
-    --query-complexity simple \
-    --users 200 \
-    --run-time 5m
-```
-
-### Warehouse Management
-```bash
-# List test warehouses
-python warehouse_manager.py list stress_testing
-
-# Suspend all (stop credit usage)
-python warehouse_manager.py suspend stress_testing
-
-# Resume all
-python warehouse_manager.py resume stress_testing
-
-# Get metrics
-python warehouse_manager.py metrics stress_testing STRESS_TEST_XSMALL_GEN1
-
-# Cleanup (drop all)
-python warehouse_manager.py cleanup stress_testing
-```
-
-## Results Analysis
-
-After running tests, analyze results:
-
-```bash
-python results_aggregator.py --connection stress_testing --hours 2
-```
-
-Output:
-```
-======================================================================
-SNOWFLAKE STRESS TEST RESULTS SUMMARY
-======================================================================
-
---- Gen1 vs Gen2 Comparison ---
-Metric                         Gen1            Gen2      Improvement
----------------------------------------------------------------------------
-Avg Latency (ms)             245.32          198.45          19.1%
-P95 Latency (ms)             523.18          412.67          21.1%
-Total Queries                 12453           12891
-Error Rate                   0.0012          0.0008
-
---- Size Comparison ---
-Size           Queries   Avg Latency   P95 Latency      Q/Credit
-----------------------------------------------------------------------
-XSMALL            4521        312.45        687.23          4521
-SMALL             8234        234.67        498.34          4117
-MEDIUM           12589        178.23        356.78          3147
-
---- Recommendations ---
-1. Gen2 warehouses show 19.1% latency improvement. Consider migrating...
-2. XSMALL warehouses show best cost efficiency at 4521 queries per credit.
-```
-
-## Tips
-
-1. **Start Small**: Begin with X-Small warehouses and 10-20 users
-2. **Monitor Credits**: Use `suspend_warehouses.sql` when not testing
-3. **Warmup**: Warehouses need 30-60 seconds to warm up after resume
-4. **Cache IDs**: First run caches IDs to `snowflake_id_cache.pickle`
-5. **Check Errors**: High error rates may indicate warehouse saturation
-
-## Troubleshooting
-
-### "No connection found"
-Verify your `~/.snowflake/config.toml` has a `stress_testing` connection.
-
-### "Permission denied on warehouse"
-Ensure your role has USAGE grant on the test warehouses.
-
-### "Query timeout"
-Increase the timeout in queries or reduce concurrent users.
-
-### "Connection pool exhausted"
-Reduce users or increase `MAX_POOL_SIZE` in locustfile.
+MIT

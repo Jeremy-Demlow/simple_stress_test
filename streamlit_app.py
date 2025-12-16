@@ -332,6 +332,19 @@ def test_queries(conn) -> dict:
 # Visualization Components
 # ============================================================
 
+def ms_to_seconds(ms: float) -> str:
+    """Convert milliseconds to seconds with appropriate precision."""
+    if ms is None:
+        return "N/A"
+    seconds = ms / 1000.0
+    if seconds < 1:
+        return f"{seconds:.3f}s"  # 0.123s
+    elif seconds < 10:
+        return f"{seconds:.2f}s"  # 1.23s
+    else:
+        return f"{seconds:.1f}s"  # 12.3s
+
+
 def render_metric_card(label: str, value, delta=None, delta_color="normal"):
     """Render a styled metric card."""
     st.metric(label=label, value=value, delta=delta, delta_color=delta_color)
@@ -342,8 +355,9 @@ def render_comparison_chart(gen1_data: dict, gen2_data: dict, title: str):
     metrics = ['avg_elapsed_ms', 'median_elapsed_ms', 'p95_elapsed_ms', 'p99_elapsed_ms']
     labels = ['Average', 'Median', 'P95', 'P99']
 
-    gen1_values = [gen1_data.get(m, 0) or 0 for m in metrics]
-    gen2_values = [gen2_data.get(m, 0) or 0 for m in metrics]
+    # Convert ms to seconds for the chart
+    gen1_values = [(gen1_data.get(m, 0) or 0) / 1000.0 for m in metrics]
+    gen2_values = [(gen2_data.get(m, 0) or 0) / 1000.0 for m in metrics]
 
     fig = go.Figure(data=[
         go.Bar(name='Gen1', x=labels, y=gen1_values, marker_color='#636EFA'),
@@ -353,7 +367,7 @@ def render_comparison_chart(gen1_data: dict, gen2_data: dict, title: str):
     fig.update_layout(
         title=title,
         barmode='group',
-        yaxis_title='Latency (ms)',
+        yaxis_title='Latency (seconds)',
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         height=400
     )
@@ -594,8 +608,8 @@ def page_gen_comparison():
                 'p99_elapsed_ms': gen1_history['TOTAL_ELAPSED_TIME'].quantile(0.99),
             }
             render_metric_card("Total Queries", gen1_metrics['total_queries'])
-            render_metric_card("Avg Latency", f"{gen1_metrics['avg_elapsed_ms']:.1f} ms")
-            render_metric_card("P95 Latency", f"{gen1_metrics['p95_elapsed_ms']:.1f} ms")
+            render_metric_card("Avg Latency", ms_to_seconds(gen1_metrics['avg_elapsed_ms']))
+            render_metric_card("P95 Latency", ms_to_seconds(gen1_metrics['p95_elapsed_ms']))
         else:
             st.warning(f"No tagged queries found for {gen1_wh}")
             gen1_metrics = {}
@@ -622,11 +636,11 @@ def page_gen_comparison():
             render_metric_card("Total Queries", gen2_metrics['total_queries'])
             render_metric_card(
                 "Avg Latency",
-                f"{gen2_metrics['avg_elapsed_ms']:.1f} ms",
+                ms_to_seconds(gen2_metrics['avg_elapsed_ms']),
                 delta=f"{improvement:.1f}% faster" if improvement > 0 else f"{-improvement:.1f}% slower",
                 delta_color="normal" if improvement > 0 else "inverse"
             )
-            render_metric_card("P95 Latency", f"{gen2_metrics['p95_elapsed_ms']:.1f} ms")
+            render_metric_card("P95 Latency", ms_to_seconds(gen2_metrics['p95_elapsed_ms']))
         else:
             st.warning(f"No tagged queries found for {gen2_wh}")
             gen2_metrics = {}
@@ -640,20 +654,20 @@ def page_gen_comparison():
         # Summary comparison table
         st.subheader("📋 Summary")
         comparison_data = {
-            'Metric': ['Total Queries', 'Avg Latency (ms)', 'Median (ms)', 'P95 (ms)', 'P99 (ms)'],
+            'Metric': ['Total Queries', 'Avg Latency', 'Median', 'P95', 'P99'],
             'Gen1': [
                 gen1_metrics['total_queries'],
-                f"{gen1_metrics['avg_elapsed_ms']:.1f}",
-                f"{gen1_metrics['median_elapsed_ms']:.1f}",
-                f"{gen1_metrics['p95_elapsed_ms']:.1f}",
-                f"{gen1_metrics['p99_elapsed_ms']:.1f}",
+                ms_to_seconds(gen1_metrics['avg_elapsed_ms']),
+                ms_to_seconds(gen1_metrics['median_elapsed_ms']),
+                ms_to_seconds(gen1_metrics['p95_elapsed_ms']),
+                ms_to_seconds(gen1_metrics['p99_elapsed_ms']),
             ],
             'Gen2': [
                 gen2_metrics['total_queries'],
-                f"{gen2_metrics['avg_elapsed_ms']:.1f}",
-                f"{gen2_metrics['median_elapsed_ms']:.1f}",
-                f"{gen2_metrics['p95_elapsed_ms']:.1f}",
-                f"{gen2_metrics['p99_elapsed_ms']:.1f}",
+                ms_to_seconds(gen2_metrics['avg_elapsed_ms']),
+                ms_to_seconds(gen2_metrics['median_elapsed_ms']),
+                ms_to_seconds(gen2_metrics['p95_elapsed_ms']),
+                ms_to_seconds(gen2_metrics['p99_elapsed_ms']),
             ],
             'Difference': [
                 f"{gen2_metrics['total_queries'] - gen1_metrics['total_queries']:+d}",
@@ -737,13 +751,13 @@ def page_warehouse_details():
         render_metric_card("Total Queries", len(query_history))
     with col2:
         avg_latency = query_history['TOTAL_ELAPSED_TIME'].mean()
-        render_metric_card("Avg Latency", f"{avg_latency:.1f} ms")
+        render_metric_card("Avg Latency", ms_to_seconds(avg_latency))
     with col3:
         p95_latency = query_history['TOTAL_ELAPSED_TIME'].quantile(0.95)
-        render_metric_card("P95 Latency", f"{p95_latency:.1f} ms")
+        render_metric_card("P95 Latency", ms_to_seconds(p95_latency))
     with col4:
         max_latency = query_history['TOTAL_ELAPSED_TIME'].max()
-        render_metric_card("Max Latency", f"{max_latency:.1f} ms")
+        render_metric_card("Max Latency", ms_to_seconds(max_latency))
 
     # Time series chart from query history
     if 'START_TIME' in query_history.columns:
@@ -758,13 +772,15 @@ def page_warehouse_details():
         time_agg.columns = ['MINUTE', 'QUERY_COUNT', 'AVG_LATENCY_MS', 'BYTES_SCANNED']
 
         if not time_agg.empty:
-            fig = make_subplots(rows=1, cols=2, subplot_titles=('Query Count per Minute', 'Avg Latency per Minute'))
+            # Convert ms to seconds for the chart
+            time_agg['AVG_LATENCY_S'] = time_agg['AVG_LATENCY_MS'] / 1000.0
+            fig = make_subplots(rows=1, cols=2, subplot_titles=('Query Count per Minute', 'Avg Latency (seconds)'))
             fig.add_trace(
                 go.Scatter(x=time_agg['MINUTE'], y=time_agg['QUERY_COUNT'], mode='lines+markers', name='Queries'),
                 row=1, col=1
             )
             fig.add_trace(
-                go.Scatter(x=time_agg['MINUTE'], y=time_agg['AVG_LATENCY_MS'], mode='lines+markers', name='Latency'),
+                go.Scatter(x=time_agg['MINUTE'], y=time_agg['AVG_LATENCY_S'], mode='lines+markers', name='Latency'),
                 row=1, col=2
             )
             fig.update_layout(height=350, showlegend=False)
